@@ -31,6 +31,8 @@
 #include <cutils/log.h>
 #include <cutils/atomic.h>
 
+#include <ion/ion.h>
+
 #include <hardware/hardware.h>
 #include <hardware/gralloc.h>
 
@@ -42,6 +44,7 @@
 struct gralloc_context_t {
     alloc_device_t  device;
     /* our private data here */
+    int ion_fd;
 };
 
 static int gralloc_alloc_buffer(alloc_device_t* dev,
@@ -149,6 +152,7 @@ static int gralloc_alloc_framebuffer_locked(alloc_device_t* dev,
     
     hnd->base = vaddr;
     hnd->offset = vaddr - intptr_t(m->framebuffer->base);
+    ALOGD("gralloc framebuffer base=%ux offset=%x", hnd->base, hnd->offset);
     *pHandle = hnd;
 
     return 0;
@@ -173,10 +177,33 @@ static int gralloc_alloc_buffer(alloc_device_t* dev,
 
     size = roundUpToPageSize(size);
     
-    fd = ashmem_create_region("gralloc-buffer", size);
+    struct gralloc_context_t *ctx = reinterpret_cast<gralloc_context_t*>(dev);
+
+    if (ctx->ion_fd >= 0) {
+        struct ion_handle *handle;
+        int alloc_flags = 0xf; //FIXME
+        err = ion_alloc(ctx->ion_fd, size, 4096, alloc_flags, &handle);
+        ALOGD("ion_alloc returned %d handle %p dev %p ion_fd %d\n",
+              err, handle, ctx, ctx->ion_fd);
+        if (err < 0) {
+            ALOGE("could not alloc ion buffer %d", err);
+        } else {
+            int map_flags = MAP_SHARED; //FIXME
+            unsigned char *ptr;
+            err = ion_map(ctx->ion_fd, handle, size, PROT_READ|PROT_WRITE,
+                          map_flags, 0, &ptr, &fd);
+            if (!err)
+                ALOGD("mapped ion buffer shared fd=%d ptr=%p\n", fd, ptr);
+            else
+                ALOGE("error mapping ion handle %p\n", handle);
+        }
+    }
     if (fd < 0) {
-        ALOGE("couldn't create ashmem (%s)", strerror(-errno));
-        err = -errno;
+        fd = ashmem_create_region("gralloc-buffer", size);
+        if (fd < 0) {
+            ALOGE("couldn't create ashmem (%s)", strerror(-errno));
+            err = -errno;
+        }
     }
 
     if (err == 0) {
@@ -185,6 +212,7 @@ static int gralloc_alloc_buffer(alloc_device_t* dev,
                 dev->common.module);
         err = mapBuffer(module, hnd);
         if (err == 0) {
+            ALOGW("gralloc_alloc_buffer base=%x+%x", hnd->base, hnd->offset);
             *pHandle = hnd;
         }
     }
@@ -303,6 +331,10 @@ int gralloc_device_open(const hw_module_t* module, const char* name,
         dev->device.free    = gralloc_free;
 
         *device = &dev->device.common;
+
+        dev->ion_fd = ion_open();
+        ALOGD("dev=%p ion_fd=%d", dev, dev->ion_fd);
+
         status = 0;
     } else {
         status = fb_device_open(module, name, device);

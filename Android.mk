@@ -20,14 +20,16 @@ LOCAL_PATH := $(call my-dir)
 include $(CLEAR_VARS)
 
 LOCAL_MODULE_PATH := $(TARGET_OUT_SHARED_LIBRARIES)/hw
-LOCAL_SHARED_LIBRARIES := liblog libcutils
+LOCAL_SHARED_LIBRARIES := liblog libcutils libion
+LOCAL_ADDITIONAL_DEPENDENCIES := $(TARGET_OUT_SHARED_LIBRARIES)/libion.so
 
 LOCAL_SRC_FILES := 	\
 	gralloc.cpp 	\
 	framebuffer.cpp \
 	mapper.cpp
 
-LOCAL_MODULE := gralloc.zedboard
+LOCAL_MODULE_TAGS = optional
+LOCAL_MODULE := gralloc.zynq
 LOCAL_CFLAGS:= -DLOG_TAG=\"gralloc\"
 
 include $(BUILD_SHARED_LIBRARY)

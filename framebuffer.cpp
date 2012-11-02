@@ -55,6 +55,9 @@ struct fb_context_t {
     framebuffer_device_t  device;
 };
 
+static int override_xres = 800;
+static int override_yres = 400;
+
 /*****************************************************************************/
 
 static int fb_setSwapInterval(struct framebuffer_device_t* dev,
@@ -123,19 +126,19 @@ static int fb_post(struct framebuffer_device_t* dev, buffer_handle_t buffer)
 
         char *dst_vaddr = (char*)fb_vaddr;
         char *src_vaddr = (char*)buffer_vaddr;
-        size_t src_row_bytes = m->info.xres/2 * (m->info.bits_per_pixel >> 3);
+        size_t src_row_bytes = override_xres * (m->info.bits_per_pixel >> 3);
         if (0)
         ALOGI("%s:%d line_length=%d size=%d smem_len=%d src_row_bytes=%d\n",
               __FILE__, __LINE__,
               m->finfo.line_length,
-              m->finfo.line_length * m->info.yres/2,
+              m->finfo.line_length * override_yres,
               m->finfo.smem_len,
               src_row_bytes);
 
         if (0) {
             memcpy(dst_vaddr, buffer_vaddr, m->finfo.smem_len);
         } else {
-            for (int row = 0; row < m->info.yres/2; row++) {
+            for (int row = 0; row < override_yres; row++) {
                 if (0)
                 ALOGI("%s:%d row=%d dst_vaddr=%p src_vaddr=%p\n",
                       __FILE__, __LINE__,
@@ -222,6 +225,9 @@ int mapFrameBufferLocked(struct private_module_t* module)
         ALOGI("page flipping seems to be supported (yres_virtual=%d, requested=%d)",
               info.yres_virtual, info.yres*2);
     }
+
+    //override_xres = info.xres;
+    //override_yres = info.yres;
 
     if (ioctl(fd, FBIOGET_VSCREENINFO, &info) == -1)
         return -errno;
@@ -370,8 +376,8 @@ int fb_device_open(hw_module_t const* module, const char* name,
                          ? HAL_PIXEL_FORMAT_RGBX_8888
                          : HAL_PIXEL_FORMAT_RGB_565;
             const_cast<uint32_t&>(dev->device.flags) = 0;
-            const_cast<uint32_t&>(dev->device.width) = m->info.xres / 2;
-            const_cast<uint32_t&>(dev->device.height) = m->info.yres / 2;
+            const_cast<uint32_t&>(dev->device.width) = override_xres;
+            const_cast<uint32_t&>(dev->device.height) = override_yres;
             const_cast<int&>(dev->device.stride) = stride;
             const_cast<int&>(dev->device.format) = format;
             const_cast<float&>(dev->device.xdpi) = m->xdpi;
