@@ -181,8 +181,9 @@ static int gralloc_alloc_buffer(alloc_device_t* dev,
 
     if (ctx->ion_fd >= 0) {
         struct ion_handle *handle;
+        int heap_mask = 0xf;
         int alloc_flags = 0xf; //FIXME
-        err = ion_alloc(ctx->ion_fd, size, 4096, alloc_flags, &handle);
+        err = ion_alloc(ctx->ion_fd, size, 4096, heap_mask, alloc_flags, &handle);
         ALOGD("ion_alloc returned %d handle %p dev %p ion_fd %d\n",
               err, handle, ctx, ctx->ion_fd);
         if (err < 0) {
