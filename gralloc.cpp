@@ -98,6 +98,9 @@ struct private_module_t HAL_MODULE_INFO_SYM = {
     flags: 0,
     numBuffers: 0,
     bufferMask: 0,
+    isXylonfb: 0,
+    bufferWidth: 0,
+    bufferHeight: 0,
     lock: PTHREAD_MUTEX_INITIALIZER,
     currentBuffer: 0,
 };
@@ -122,7 +125,9 @@ static int gralloc_alloc_framebuffer_locked(alloc_device_t* dev,
 
     const uint32_t bufferMask = m->bufferMask;
     const uint32_t numBuffers = m->numBuffers;
-    const size_t bufferSize = m->finfo.line_length * m->info.yres;
+    const size_t bufferSize = (m->isXylonfb
+                               ? m->bufferHeight * m->bufferWidth * 4
+                               : m->finfo.line_length * m->info.yres);
     if (numBuffers == 1) {
         // If we have only one buffer, we never use page-flipping. Instead,
         // we return a regular buffer which will be memcpy'ed to the main
@@ -136,10 +141,10 @@ static int gralloc_alloc_framebuffer_locked(alloc_device_t* dev,
         return -ENOMEM;
     }
 
-    // create a "fake" handles for it
+    // create a handle for it
     intptr_t vaddr = intptr_t(m->framebuffer->base);
     private_handle_t* hnd = new private_handle_t(dup(m->framebuffer->fd), size,
-            private_handle_t::PRIV_FLAGS_FRAMEBUFFER);
+                                                 private_handle_t::PRIV_FLAGS_FRAMEBUFFER);
 
     // find a free slot
     for (uint32_t i=0 ; i<numBuffers ; i++) {
@@ -152,7 +157,8 @@ static int gralloc_alloc_framebuffer_locked(alloc_device_t* dev,
     
     hnd->base = vaddr;
     hnd->offset = vaddr - intptr_t(m->framebuffer->base);
-    ALOGD("gralloc framebuffer base=%ux offset=%x", hnd->base, hnd->offset);
+    ALOGD("gralloc framebuffer base=%lx offset=%x bufferMask=%x bufferSize=%d numBuffers=%d",
+          hnd->base, hnd->offset, m->bufferMask, bufferSize, numBuffers);
     *pHandle = hnd;
 
     return 0;
@@ -184,8 +190,6 @@ static int gralloc_alloc_buffer(alloc_device_t* dev,
         int heap_mask = 0xf;
         int alloc_flags = 0xf; //FIXME
         err = ion_alloc(ctx->ion_fd, size, 4096, heap_mask, alloc_flags, &handle);
-        ALOGD("ion_alloc returned %d handle %p dev %p ion_fd %d\n",
-              err, handle, ctx, ctx->ion_fd);
         if (err < 0) {
             ALOGE("could not alloc ion buffer %d", err);
         } else {
@@ -193,9 +197,7 @@ static int gralloc_alloc_buffer(alloc_device_t* dev,
             unsigned char *ptr;
             err = ion_map(ctx->ion_fd, handle, size, PROT_READ|PROT_WRITE,
                           map_flags, 0, &ptr, &fd);
-            if (!err)
-                ALOGD("mapped ion buffer shared fd=%d ptr=%p\n", fd, ptr);
-            else
+            if (err)
                 ALOGE("error mapping ion handle %p\n", handle);
         }
     }
@@ -213,7 +215,6 @@ static int gralloc_alloc_buffer(alloc_device_t* dev,
                 dev->common.module);
         err = mapBuffer(module, hnd);
         if (err == 0) {
-            ALOGW("gralloc_alloc_buffer base=%x+%x", hnd->base, hnd->offset);
             *pHandle = hnd;
         }
     }
@@ -283,7 +284,9 @@ static int gralloc_free(alloc_device_t* dev,
         // free this buffer
         private_module_t* m = reinterpret_cast<private_module_t*>(
                 dev->common.module);
-        const size_t bufferSize = m->finfo.line_length * m->info.yres;
+        size_t bufferSize = (m->isXylonfb
+                             ? m->bufferHeight * m->bufferWidth * 4
+                             : m->finfo.line_length * m->info.yres);
         int index = (hnd->base - m->framebuffer->base) / bufferSize;
         m->bufferMask &= ~(1<<index); 
     } else { 

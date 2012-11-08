@@ -41,6 +41,9 @@ struct private_module_t {
     uint32_t flags;
     uint32_t numBuffers;
     uint32_t bufferMask;
+    uint32_t isXylonfb; 
+    uint32_t bufferWidth; // xylon only
+    uint32_t bufferHeight; // xylon only
     pthread_mutex_t lock;
     buffer_handle_t currentBuffer;
     int pmem_master;

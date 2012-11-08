@@ -35,6 +35,7 @@
 
 #if HAVE_ANDROID_OS
 #include <linux/fb.h>
+#include <linux/xylonfb.h>
 #endif
 
 #include "gralloc_priv.h"
@@ -42,8 +43,8 @@
 
 /*****************************************************************************/
 
-// numbers of buffers for page flipping
-#define NUM_BUFFERS 2
+// numbers of buffers
+#define NUM_BUFFERS 1
 
 
 enum {
@@ -96,7 +97,27 @@ static int fb_post(struct framebuffer_device_t* dev, buffer_handle_t buffer)
     private_module_t* m = reinterpret_cast<private_module_t*>(
             dev->common.module);
 
-    if (0 && (hnd->flags & private_handle_t::PRIV_FLAGS_FRAMEBUFFER)) {
+    if (m->isXylonfb && (hnd->flags & private_handle_t::PRIV_FLAGS_FRAMEBUFFER)) {
+        const size_t bufferSize = m->bufferHeight * m->bufferWidth * 4;
+        size_t offset = hnd->offset;
+        int buffer_number = offset / bufferSize;
+        ALOGD("posting buffer number %d offset %d bufferSize %d",
+              buffer_number, offset, bufferSize);
+        unsigned int buffer_offset;
+
+        if (ioctl(m->framebuffer->fd, XYLONFB_GET_LAYER_BUFFER_OFFSET, &buffer_offset))
+            ALOGE("%s:%d XYLONFB_GET_LAYER_BUFFER_OFFSET error %d", __FUNCTION__, __LINE__, errno);
+        ALOGD("before: buffer_offset %d", buffer_offset);
+
+        // flip
+        if (ioctl(m->framebuffer->fd, XYLONFB_SET_LAYER_BUFFER, buffer_number))
+            ALOGE("%s:%d XYLONFB_SET_LAYER_BUFFER error %d", __FUNCTION__, __LINE__, errno);
+
+        if (ioctl(m->framebuffer->fd, XYLONFB_GET_LAYER_BUFFER_OFFSET, &buffer_offset))
+            ALOGE("%s:%d XYLONFB_GET_LAYER_BUFFER_OFFSET error %d", __FUNCTION__, __LINE__, errno);
+        ALOGD("after: buffer_offset %d", buffer_offset);
+
+    } else if (hnd->flags & private_handle_t::PRIV_FLAGS_FRAMEBUFFER) {
         const size_t offset = hnd->base - m->framebuffer->base;
         m->info.activate = FB_ACTIVATE_VBL;
         m->info.yoffset = offset / m->finfo.line_length;
@@ -191,6 +212,18 @@ int mapFrameBufferLocked(struct private_module_t* module)
     if (ioctl(fd, FBIOGET_VSCREENINFO, &info) == -1)
         return -errno;
 
+    unsigned int arg;
+    if (ioctl(fd, XYLONFB_GET_LAYER_BUFFER, &arg) == 0) {
+        ALOGD("xylonfb layer_buffer=%x\n", arg);
+        ioctl(fd, XYLONFB_GET_LAYER_BUFFER_OFFSET, &arg);
+        ALOGD("xylonfb layer_buffer_offset=%x\n", arg);
+        module->bufferHeight = 1080;
+        module->bufferWidth = 2048; // fixed
+        ioctl(fd, XYLONFB_GET_LAYER_BUFFERS_NUM, &arg);
+        ALOGD("xylonfb layer_buffers_num=%x\n", arg);
+        module->isXylonfb = 1;
+    }
+
     info.reserved[0] = 0;
     info.reserved[1] = 0;
     info.reserved[2] = 0;
@@ -199,12 +232,12 @@ int mapFrameBufferLocked(struct private_module_t* module)
     info.activate = FB_ACTIVATE_NOW;
 
     /*
-     * Request NUM_BUFFERS screens (at lest 2 for page flipping)
+     * Request NUM_BUFFERS screens (at least 2 for page flipping)
      */
     //info.xres = info.xres_virtual / 2;
     //info.yres = info.yres_virtual / 2;
     //info.xres_virtual = info.xres;
-    info.yres_virtual = info.yres * 1; //NUM_BUFFERS;
+    info.yres_virtual = info.yres * NUM_BUFFERS;
 
     uint32_t flags = PAGE_FLIP;
     if ((ioctl(fd, FBIOPUT_VSCREENINFO, &info) == -1) || 1) {
@@ -215,7 +248,10 @@ int mapFrameBufferLocked(struct private_module_t* module)
         ALOGI("page flipping seems to be supported");
     }
 
-    if (info.yres_virtual < info.yres * 2) {
+    if (module->isXylonfb) {
+        flags |= PAGE_FLIP;
+        ALOGI("supporting page flip on xylonfb");
+    } else if (info.yres_virtual < info.yres * 2) {
         // we need at least 2 for page-flipping
         //info.yres_virtual = info.yres;
         flags &= ~PAGE_FLIP;
@@ -226,8 +262,8 @@ int mapFrameBufferLocked(struct private_module_t* module)
               info.yres_virtual, info.yres*2);
     }
 
-    //override_xres = info.xres;
-    //override_yres = info.yres;
+    override_xres = info.xres;
+    override_yres = info.yres;
 
     if (ioctl(fd, FBIOGET_VSCREENINFO, &info) == -1)
         return -errno;
@@ -314,6 +350,9 @@ int mapFrameBufferLocked(struct private_module_t* module)
 
     // calculate from smem_len / (yres_vsize * xres_vsize * bits_per_pixel/8)
     module->numBuffers = 1; //info.yres_virtual / info.yres;
+    if (module->isXylonfb)
+        ioctl(fd, XYLONFB_GET_LAYER_BUFFERS_NUM, &module->numBuffers);
+        
     module->bufferMask = 0;
 
     void* vaddr = mmap(0, fbSize, PROT_READ|PROT_WRITE, MAP_SHARED, fd, 0);
