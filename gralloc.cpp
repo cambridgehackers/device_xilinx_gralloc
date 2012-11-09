@@ -48,7 +48,7 @@ struct gralloc_context_t {
 };
 
 static int gralloc_alloc_buffer(alloc_device_t* dev,
-        size_t size, int usage, buffer_handle_t* pHandle);
+                                size_t size, size_t stride, int usage, buffer_handle_t* pHandle);
 
 /*****************************************************************************/
 
@@ -105,7 +105,8 @@ struct private_module_t HAL_MODULE_INFO_SYM = {
 /*****************************************************************************/
 
 static int gralloc_alloc_framebuffer_locked(alloc_device_t* dev,
-        size_t size, int usage, buffer_handle_t* pHandle)
+                                            size_t size, size_t stride,
+                                            int usage, buffer_handle_t* pHandle)
 {
     private_module_t* m = reinterpret_cast<private_module_t*>(
             dev->common.module);
@@ -128,7 +129,7 @@ static int gralloc_alloc_framebuffer_locked(alloc_device_t* dev,
         // we return a regular buffer which will be memcpy'ed to the main
         // screen when post is called.
         int newUsage = (usage & ~GRALLOC_USAGE_HW_FB) | GRALLOC_USAGE_HW_2D;
-        return gralloc_alloc_buffer(dev, bufferSize, newUsage, pHandle);
+        return gralloc_alloc_buffer(dev, bufferSize, stride, newUsage, pHandle);
     }
 
     if (bufferMask >= ((1LU<<numBuffers)-1)) {
@@ -152,6 +153,7 @@ static int gralloc_alloc_framebuffer_locked(alloc_device_t* dev,
     
     hnd->base = vaddr;
     hnd->offset = vaddr - intptr_t(m->framebuffer->base);
+    hnd->stride = 27;
     ALOGD("gralloc framebuffer base=%ux offset=%x", hnd->base, hnd->offset);
     *pHandle = hnd;
 
@@ -159,18 +161,19 @@ static int gralloc_alloc_framebuffer_locked(alloc_device_t* dev,
 }
 
 static int gralloc_alloc_framebuffer(alloc_device_t* dev,
-        size_t size, int usage, buffer_handle_t* pHandle)
+                                     size_t size, size_t stride,
+                                     int usage, buffer_handle_t* pHandle)
 {
     private_module_t* m = reinterpret_cast<private_module_t*>(
             dev->common.module);
     pthread_mutex_lock(&m->lock);
-    int err = gralloc_alloc_framebuffer_locked(dev, size, usage, pHandle);
+    int err = gralloc_alloc_framebuffer_locked(dev, size, stride, usage, pHandle);
     pthread_mutex_unlock(&m->lock);
     return err;
 }
 
 static int gralloc_alloc_buffer(alloc_device_t* dev,
-        size_t size, int usage, buffer_handle_t* pHandle)
+                                size_t size, size_t stride, int usage, buffer_handle_t* pHandle)
 {
     int err = 0;
     int fd = -1;
@@ -178,24 +181,25 @@ static int gralloc_alloc_buffer(alloc_device_t* dev,
     size = roundUpToPageSize(size);
     
     struct gralloc_context_t *ctx = reinterpret_cast<gralloc_context_t*>(dev);
+    struct ion_handle *ion_handle = 0;
 
     if (ctx->ion_fd >= 0) {
-        struct ion_handle *handle;
         int alloc_flags = 0xf; //FIXME
-        err = ion_alloc(ctx->ion_fd, size, 4096, alloc_flags, &handle);
-        ALOGD("ion_alloc returned %d handle %p dev %p ion_fd %d\n",
-              err, handle, ctx, ctx->ion_fd);
+        int heap_flags = 0xf;
+        err = ion_alloc(ctx->ion_fd, size, 4096, heap_flags, alloc_flags, &ion_handle);
+        ALOGD("ion_alloc returned %d ion_handle %p dev %p ion_fd %d\n",
+              err, ion_handle, ctx, ctx->ion_fd);
         if (err < 0) {
             ALOGE("could not alloc ion buffer %d", err);
         } else {
             int map_flags = MAP_SHARED; //FIXME
             unsigned char *ptr;
-            err = ion_map(ctx->ion_fd, handle, size, PROT_READ|PROT_WRITE,
+            err = ion_map(ctx->ion_fd, ion_handle, size, PROT_READ|PROT_WRITE,
                           map_flags, 0, &ptr, &fd);
             if (!err)
                 ALOGD("mapped ion buffer shared fd=%d ptr=%p\n", fd, ptr);
             else
-                ALOGE("error mapping ion handle %p\n", handle);
+                ALOGE("error mapping ion_handle %p\n", ion_handle);
         }
     }
     if (fd < 0) {
@@ -208,6 +212,8 @@ static int gralloc_alloc_buffer(alloc_device_t* dev,
 
     if (err == 0) {
         private_handle_t* hnd = new private_handle_t(fd, size, 0);
+        hnd->stride = stride;
+        hnd->ion_handle = ion_handle;
         gralloc_module_t* module = reinterpret_cast<gralloc_module_t*>(
                 dev->common.module);
         err = mapBuffer(module, hnd);
@@ -258,9 +264,9 @@ static int gralloc_alloc(alloc_device_t* dev,
 
     int err;
     if (usage & GRALLOC_USAGE_HW_FB) {
-        err = gralloc_alloc_framebuffer(dev, size, usage, pHandle);
+        err = gralloc_alloc_framebuffer(dev, size, stride, usage, pHandle);
     } else {
-        err = gralloc_alloc_buffer(dev, size, usage, pHandle);
+        err = gralloc_alloc_buffer(dev, size, stride, usage, pHandle);
     }
 
     if (err < 0) {
@@ -272,7 +278,7 @@ static int gralloc_alloc(alloc_device_t* dev,
 }
 
 static int gralloc_free(alloc_device_t* dev,
-        buffer_handle_t handle)
+                        buffer_handle_t handle)
 {
     if (private_handle_t::validate(handle) < 0)
         return -EINVAL;
@@ -286,9 +292,16 @@ static int gralloc_free(alloc_device_t* dev,
         int index = (hnd->base - m->framebuffer->base) / bufferSize;
         m->bufferMask &= ~(1<<index); 
     } else { 
-        gralloc_module_t* module = reinterpret_cast<gralloc_module_t*>(
-                dev->common.module);
-        terminateBuffer(module, const_cast<private_handle_t*>(hnd));
+        gralloc_module_t* module = reinterpret_cast<gralloc_module_t*>(dev->common.module);
+        struct gralloc_context_t *ctx = reinterpret_cast<gralloc_context_t*>(dev);
+
+        private_handle_t *private_handle = const_cast<private_handle_t*>(hnd);
+        if (ctx->ion_fd) {
+            struct ion_handle *ion_handle = private_handle->ion_handle;
+            ion_free(ctx->ion_fd, ion_handle);
+        } else {
+            terminateBuffer(module, private_handle);
+        }
     }
 
     close(hnd->fd);

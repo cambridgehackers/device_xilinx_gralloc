@@ -77,15 +77,17 @@ struct private_handle_t {
     // FIXME: the attributes below should be out-of-line
     int     base;
     int     pid;
+    int     stride;
+    struct ion_handle *ion_handle; 
 
 #ifdef __cplusplus
     static const int sNumInts = 6;
     static const int sNumFds = 1;
-    static const int sMagic = 0x3141592;
+    static const int sMagic = 0x11052012;
 
     private_handle_t(int fd, int size, int flags) :
         fd(fd), magic(sMagic), flags(flags), size(size), offset(0),
-        base(0), pid(getpid())
+        base(0), pid(getpid()), stride(0), ion_handle(0)
     {
         version = sizeof(native_handle);
         numInts = sNumInts;
