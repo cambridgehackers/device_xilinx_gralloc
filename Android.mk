@@ -20,8 +20,7 @@ LOCAL_PATH := $(call my-dir)
 include $(CLEAR_VARS)
 
 LOCAL_MODULE_PATH := $(TARGET_OUT_SHARED_LIBRARIES)/hw
-LOCAL_SHARED_LIBRARIES := liblog libcutils libion
-LOCAL_ADDITIONAL_DEPENDENCIES := $(TARGET_OUT_SHARED_LIBRARIES)/libion.so
+LOCAL_SHARED_LIBRARIES := liblog libcutils
 
 LOCAL_SRC_FILES := 	\
 	gralloc.cpp 	\
