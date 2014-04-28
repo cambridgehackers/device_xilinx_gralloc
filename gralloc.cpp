@@ -31,8 +31,6 @@
 #include <cutils/log.h>
 #include <cutils/atomic.h>
 
-#include <ion/ion.h>
-
 #include <hardware/hardware.h>
 #include <hardware/gralloc.h>
 
@@ -181,29 +179,6 @@ static int gralloc_alloc_buffer(alloc_device_t* dev,
     size = roundUpToPageSize(size);
     
     struct gralloc_context_t *ctx = reinterpret_cast<gralloc_context_t*>(dev);
-#ifdef USE_ION_ALLOC
-    struct ion_handle *ion_handle = 0;
-
-    if (ctx->ion_fd >= 0) {
-        int alloc_flags = 0xf; //FIXME
-        int heap_flags = 0xf;
-        err = ion_alloc(ctx->ion_fd, size, 4096, heap_flags, alloc_flags, &ion_handle);
-        ALOGD("ion_alloc returned %d ion_handle %p dev %p ion_fd %d\n",
-              err, ion_handle, ctx, ctx->ion_fd);
-        if (err < 0) {
-            ALOGE("could not alloc ion buffer %d", err);
-        } else {
-            int map_flags = MAP_SHARED; //FIXME
-            unsigned char *ptr;
-            err = ion_map(ctx->ion_fd, ion_handle, size, PROT_READ|PROT_WRITE,
-                          map_flags, 0, &ptr, &fd);
-            if (!err)
-                ALOGD("mapped ion buffer shared fd=%d ptr=%p\n", fd, ptr);
-            else
-                ALOGE("error mapping ion_handle %p\n", ion_handle);
-        }
-    }
-#endif
     if (fd < 0) {
         fd = ashmem_create_region("gralloc-buffer", size);
         if (fd < 0) {
@@ -215,9 +190,6 @@ static int gralloc_alloc_buffer(alloc_device_t* dev,
     if (err == 0) {
         private_handle_t* hnd = new private_handle_t(fd, size, 0);
         hnd->stride = stride;
-#ifdef USE_ION_ALLOC
-        hnd->ion_handle = ion_handle;
-#endif
         gralloc_module_t* module = reinterpret_cast<gralloc_module_t*>(
                 dev->common.module);
         err = mapBuffer(module, hnd);
@@ -300,12 +272,6 @@ static int gralloc_free(alloc_device_t* dev,
         struct gralloc_context_t *ctx = reinterpret_cast<gralloc_context_t*>(dev);
 
         private_handle_t *private_handle = const_cast<private_handle_t*>(hnd);
-#ifdef USE_ION_ALLOC
-        if (ctx->ion_fd) {
-            struct ion_handle *ion_handle = private_handle->ion_handle;
-            ion_free(ctx->ion_fd, ion_handle);
-        } else 
-#endif
           {
             terminateBuffer(module, private_handle);
         }
@@ -351,11 +317,6 @@ int gralloc_device_open(const hw_module_t* module, const char* name,
         dev->device.free    = gralloc_free;
 
         *device = &dev->device.common;
-
-#ifdef USE_ION_ALLOC
-        dev->ion_fd = ion_open();
-        ALOGD("dev=%p ion_fd=%d", dev, dev->ion_fd);
-#endif
 
         status = 0;
     } else {
